@@ -1,0 +1,107 @@
+import numpy as np
+import h5py
+import os
+import pywt
+import torch
+import cv2
+import torchvision.transforms as transforms
+from torchvision.models import alexnet
+import torchvision.models as models
+from tqdm import tqdm
+
+def cross_wavelet_transform(channel1, channel2):
+    cwt1, _ = pywt.cwt(channel1, np.arange(1, 45), 'morl', sampling_period=0.004)
+    cwt2, _ = pywt.cwt(channel2, np.arange(1, 45), 'morl', sampling_period=0.004)
+
+    cwt_cross = cwt1 * np.conj(cwt2)
+
+    cwt_cross_tensor = torch.from_numpy(cwt_cross).float()
+    return cwt_cross_tensor
+
+
+def load_hdf5_file(file_path):
+    with h5py.File(file_path, 'r') as f:
+        data = f['data'][:]
+    return data
+
+file_prefix_to_label = {
+    '0201': 1,
+    '0202': 0,
+    '0203': 0,
+}
+
+all_dir = "/content/gdrive/MyDrive/ERP_all_data"
+file_list = os.listdir(all_dir)
+
+batch_size = 100000
+
+# تعریف مدل AlexNet
+model = models.alexnet(pretrained=True)
+model.eval()
+
+feature_vectors = []
+labels = []
+
+for file_idx, file_name in enumerate(tqdm(file_list)):
+    file_path = os.path.join(all_dir, file_name)
+    if file_name.endswith('.h5'):
+        data = load_hdf5_file(file_path)
+    elif file_name.endswith('.npy'):
+        data = np.load(file_path)
+
+    data = data.reshape(data.shape[1], -1)
+    data_array = data[:128, :]
+
+    channels = [data_array[i, :] for i in range(128)]
+
+    num_batches = (data_array.shape[1] + batch_size - 1) // batch_size
+
+    all_batch_features = []
+
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min((batch_idx + 1) * batch_size, data_array.shape[1])
+        batch_data = data_array[:, start_idx:end_idx]
+
+        cwt_cross_list = []
+        for i in range(128):
+            cwt_cross = cross_wavelet_transform(batch_data[i], batch_data[i])
+            cwt_cross_list.append(cwt_cross)
+
+        cwt_cross_tensor = torch.stack(cwt_cross_list, dim=0)
+        rgb_image = cv2.cvtColor(cwt_cross_tensor.numpy(), cv2.COLOR_GRAY2RGB)
+        pil_image = transforms.ToPILImage()(rgb_image)
+
+        transform = transforms.Compose([
+            transforms.Resize((227, 227)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+        channel_image = transform(pil_image)
+
+        # Add a dimension to the image
+        channel_image = torch.unsqueeze(channel_image, 0)
+
+        feature_vector = model.features(channel_image)
+        feature_vector = torch.flatten(feature_vector, 1)
+        all_batch_features.extend(feature_vector.detach().numpy())
+
+
+        del batch_data, cwt_cross_list, cwt_cross_tensor, rgb_image, pil_image, channel_image
+        torch.cuda.empty_cache()
+
+
+
+    file_features = np.mean(all_batch_features, axis=0)  # Combine batch features horizontally and then flatten
+    feature_vectors.append(file_features)
+
+    file_prefix = file_name[:4]
+    label = file_prefix_to_label.get(file_prefix)
+    labels.append(label)
+
+
+features = np.array(feature_vectors)
+labels = np.array(labels)
+print(features.shape)
+print(labels.shape)
