@@ -1,0 +1,142 @@
+#step 1
+import os
+import numpy as np
+import networkx as nx
+from sklearn.metrics import pairwise_distances
+from scipy.io import loadmat
+
+
+def euclidean_distance(point1, point2):
+    return np.linalg.norm(point1 - point2)
+
+def read_subject_file(file_path):
+    data = loadmat(file_path)
+    keys = list(data.keys())
+    return data, keys
+
+
+directory_path = "/content/gdrive/MyDrive/Preprocessing_EEG_128channels"
+file_list = os.listdir(directory_path)
+
+# Definition of graphs
+graphs = []
+for _ in range(128):
+    graphs.append(nx.Graph())
+
+# Reading and adding data to graphs
+for i, file1 in enumerate(file_list):
+    for j, file2 in enumerate(file_list):
+        if i < j:
+            file1_path = os.path.join(directory_path, file1)
+            file2_path = os.path.join(directory_path, file2)
+
+            data1, keys1 = read_subject_file(file1_path)
+            data2, keys2 = read_subject_file(file2_path)
+
+            key1 = keys1[3]
+            key2 = keys2[3]
+
+            data1_array = data1[key1]
+            data2_array = data2[key2]
+
+
+            # Data size matching
+            max_length = max(data1_array.shape[1], data2_array.shape[1])
+            data1 = np.pad(data1_array,((0,0), (0, max_length - data1_array.shape[1])), mode = 'constant')
+            data2 = np.pad(data2_array,((0,0), (0, max_length - data2_array.shape[1])), mode = 'constant')
+
+            for k in range(128):
+                distance = euclidean_distance(data1[k, :], data2[k, :])
+                graphs[k].add_edge(file1, file2, weight=distance)
+
+# step 2
+import numpy as np
+
+# Hyperparameters
+m = 0.5
+o = 2
+
+# Calculate the transition probabilities between nodes
+def calculate_transition_probabilities(graph, m, o):
+    transition_probabilities = {}
+
+    for node in graph.nodes:
+        neighbors = list(graph.neighbors(node))
+        total_weight = sum(graph[node][neighbor]['weight'] for neighbor in neighbors)
+
+        probabilities = {}
+        for neighbor in neighbors:
+            weight = graph[node][neighbor]['weight']
+            d_ux = nx.shortest_path_length(graph, source=node, target=neighbor)
+
+            if d_ux == 0:
+                alpha = 1 / m
+            elif d_ux == 1:
+                alpha = 1
+            elif d_ux == 2:
+                alpha = 1 / o
+
+            probability = alpha * (weight / total_weight)
+            probabilities[neighbor] = probability
+
+        transition_probabilities[node] = probabilities
+
+    return transition_probabilities
+
+# Calculate transition probabilities for each graph
+transition_probabilities_graph = []
+for i in range(128):
+    transition_probabilities_graph.append(calculate_transition_probabilities(graphs[i], m, o))
+
+# step 3
+import random
+
+# Generate random walks for all nodes of fixed length
+def generate_random_walks_all_nodes(graph, transition_probabilities, walk_length):
+    random_walks = []
+
+    for source_node in graph.nodes:
+        for _ in range(10):
+            walk = [source_node]
+            current_node = source_node
+
+            for _ in range(walk_length - 1):
+                neighbors = list(graph.neighbors(current_node))
+                probabilities = [transition_probabilities[current_node].get(neighbor, 0) for neighbor in neighbors]
+                probabilities_sum = sum(probabilities)
+
+                if probabilities_sum > 0:
+                    probabilities = [prob / probabilities_sum for prob in probabilities]
+                    next_node = random.choices(neighbors, probabilities)[0]
+                    walk.append(next_node)
+                    current_node = next_node
+                else:
+                    break
+
+            random_walks.append(walk)
+
+    return random_walks
+
+walk_length = 100
+
+# Generate random walks for each graph
+random_walks = []
+for i in range(128):
+    random_walks.append(generate_random_walks_all_nodes(graphs[i], transition_probabilities_graph[i], walk_length))
+
+# step 4
+from gensim.models import Word2Vec
+
+d = 128
+
+# Definition of the Word2Vec model
+models = []
+for i in range(128):
+    model = Word2Vec(sentences=random_walks[i], vector_size=d, window=2, min_count=0, sg=1)
+    models.append(model)
+
+#node_embeddings
+node_embeddings = []
+for i in range(128):
+    node_embeddings.append(models[i].wv)    
+                
