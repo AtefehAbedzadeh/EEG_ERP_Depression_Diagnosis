@@ -1,0 +1,101 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, GRU
+from sklearn.model_selection import train_test_split
+from keras.optimizers import SGD, Adamax, Adadelta, Adam, RMSprop, Adagrad
+from keras.metrics import Precision, Recall, BinaryAccuracy
+from keras.callbacks import Callback
+from keras.utils import to_categorical
+import time
+
+
+combined_features = np.concatenate((features_node2vec, features_AlexNet, features_TSCN), axis=1)
+
+X_train, X_test, y_train, y_test = train_test_split(combined_features, label, test_size=0.1, random_state=42)
+
+
+X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
+X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
+
+
+# مدل GRU
+model = Sequential()
+model.add(GRU(300, activation='tanh', input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=False))
+model.add(BatchNormalization())
+model.add(Dropout(0.2))
+model.add(Dense(60, activation='relu'))
+model.add(Dense(1, activation='sigmoid'))
+
+
+class ReduceLearningRateOnPlateau(Callback):
+    def __init__(self, factor=0.5, patience=2, min_lr=1e-4):
+        super(ReduceLearningRateOnPlateau, self).__init__()
+        self.factor = factor
+        self.patience = patience
+        self.min_lr = min_lr
+        self.wait = 0
+        self.best_loss = float('inf')
+
+    def on_epoch_end(self, epoch, logs=None):
+        current_loss = logs.get('val_loss')
+
+        if current_loss < self.best_loss:
+            self.best_loss = current_loss
+            self.wait = 0
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                new_lr = max(self.model.optimizer.learning_rate * self.factor, self.min_lr)
+                self.model.optimizer.learning_rate = new_lr
+                print(f'Reducing learning rate to {new_lr} due to no improvement in validation loss.')
+                self.wait = 0
+
+reduce_lr = ReduceLearningRateOnPlateau(factor=0.5, patience=2, min_lr=1e-4)
+
+
+model.compile(optimizer=SGD(learning_rate=0.01), loss='binary_crossentropy', metrics=['accuracy', Precision(), Recall()])
+
+history = model.fit(X_train, y_train, epochs=83, validation_data=(X_test, y_test), callbacks=[reduce_lr])
+
+pre = model.evaluate(X_test,y_test, batch_size=64, verbose=2)
+print('test_loss:', pre[0], '- test_acc:', pre[1])
+
+predictions = model.predict(X_test)
+predicted_labels = (predictions > 0.5).astype(int)
+
+from sklearn.metrics import accuracy_score
+accuracy = accuracy_score(y_test, predicted_labels)
+print('Accuracy:', accuracy)
+
+
+num_test_samples = len(X_test)
+start_time = time.time()
+predictions = model.predict(X_test)
+end_time = time.time()
+execution_time = (end_time - start_time) / num_test_samples
+print("Execution Time (Model Inference per sample):", execution_time, "seconds")
+
+
+model.save('depression_gru.h5')
+
+train_loss = history.history['loss']
+train_accuracy = history.history['accuracy']
+val_loss = history.history['val_loss']
+val_accuracy = history.history['val_accuracy']
+
+# Loss curve
+plt.plot(train_loss, label='Training Loss')
+plt.plot(val_loss, label='Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+# Accuracy curve
+plt.plot(train_accuracy, label='Training Accuracy')
+plt.plot(val_accuracy, label='Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
