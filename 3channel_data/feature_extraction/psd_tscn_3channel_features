@@ -1,0 +1,76 @@
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import welch
+from sklearn.preprocessing import StandardScaler
+
+
+def calculate_psd(data, fs, nperseg, noverlap, window):
+    frequencies, psd = welch(data, fs=fs, nperseg=nperseg, noverlap=noverlap, window=window, scaling='density')
+    return frequencies, psd
+
+def read_subject_file(file_path):
+    data = np.loadtxt(file_path)
+    return data
+
+directory_path = "/content/gdrive/MyDrive/Preprocessing_EEG_3channels"
+file_list = os.listdir(directory_path)
+
+# Sampling frequency (Hz)
+fs = 250
+
+# Welch function settings
+window = 'hamming'
+nperseg = fs  # Length of each section
+noverlap = nperseg // 2  # (50% overlap) Overlap size
+
+bands = {
+    "delta": (0.5, 4),
+    "theta": (4, 8),
+    "alpha": (8, 13),
+    "beta": (13, 30),
+}
+
+
+file_prefix_to_label = {
+    '0201': 1,
+    '0202': 0,
+    '0203': 0,
+}
+
+
+psd_features = []  
+flattened_psd = []
+labels_psd = []
+for file_name in file_list:
+    file_path = os.path.join(directory_path, file_name)
+    data = read_subject_file(file_path)
+
+    # Calculate PSD features for each channel
+    channel_psd_features = {}
+    for channel in range(3):
+        frequencies, psd = calculate_psd(data[:, channel], fs, nperseg, noverlap, window=window)
+
+        band_features = {}
+        for band, (low_freq, high_freq) in bands.items():
+            idx_band = np.logical_and(frequencies >= low_freq, frequencies <= high_freq)
+            band_features[band] = np.mean(psd[idx_band])
+
+        channel_psd_features[channel] = band_features
+
+
+    # Save PSD properties for each channel in the global list
+    flattened_psd.append(np.concatenate([list(channel_psd_features[ch].values()) for ch in range(3)]))
+
+    file_prefix = file_name[:4]
+    label_psd = file_prefix_to_label[file_prefix]
+    labels_psd.append(label_psd)
+
+
+
+scaler = StandardScaler()
+standardized_psd_features = scaler.fit_transform(flattened_psd)
+print("Flattened and standardized PSD features shape:", standardized_psd_features.shape)
+
+labels_psd = np.array(labels_psd)
+print(labels_psd.shape)
