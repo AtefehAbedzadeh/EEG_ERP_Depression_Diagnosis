@@ -1,0 +1,88 @@
+import numpy as np
+import pywt
+import os
+import torch
+from torchvision.models import alexnet
+import torchvision.models as models
+import torchvision.transforms as transforms
+import cv2
+from scipy.io import loadmat
+import tensorflow as tf
+
+
+def cross_wavelet_transform(channel1, channel2):
+    cwt1, _ = pywt.cwt(channel1, np.arange(1, 45), 'morl', sampling_period=0.004)
+    cwt2, _ = pywt.cwt(channel2, np.arange(1, 45), 'morl', sampling_period=0.004)
+
+    cwt_cross = cwt1 * np.conj(cwt2)
+
+    cwt_cross_tensor = torch.from_numpy(cwt_cross).float()
+    return cwt_cross_tensor
+
+
+def read_subject_file(file_path):
+    data = loadmat(file_path)
+    keys = list(data.keys())
+    return data, keys
+
+file_prefix_to_label = {
+    '0201': 1,
+    '0202': 0,
+    '0203': 0,
+}
+
+directory_path = "/content/gdrive/MyDrive/EEG_128channels_resting_lanzhou_2015"
+file_list = os.listdir(directory_path)
+
+# AlexNet model definition
+model = models.alexnet(pretrained=True)
+model.eval()
+
+feature_vectors = []
+labels = []
+
+for file_name in file_list:
+    file_path = os.path.join(directory_path, file_name)
+    data, keys = read_subject_file(file_path)
+
+    key = keys[3]
+    data_array = data[key]
+
+    # Separating different channels
+    channels = [data_array[i, :] for i in range(128)]
+
+
+    cwt_cross_list = []
+    for i in range(128):
+        cwt_cross = cross_wavelet_transform(channels[i], channels[i])
+        cwt_cross_list.append(cwt_cross)
+
+    cwt_cross_tensor = torch.stack(cwt_cross_list, dim=0)
+
+    rgb_image = cv2.cvtColor(cwt_cross_tensor.numpy(), cv2.COLOR_GRAY2RGB)
+    pil_image = transforms.ToPILImage()(rgb_image)
+
+    transform = transforms.Compose([
+        transforms.Resize((227, 227)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    channel_image = transform(pil_image)
+
+    # Add a dimension to the image
+    channel_image = torch.unsqueeze(channel_image, 0)
+
+    feature_vector = model.features(channel_image)
+    feature_vector = torch.flatten(feature_vector, 1)
+    feature_vectors.extend(feature_vector.detach().numpy())
+
+
+    file_prefix = file_name[:4]
+    label = file_prefix_to_label[file_prefix]
+    labels.append(label)
+
+
+features = np.array(feature_vectors)
+label = np.array(labels)
+print(features.shape)
