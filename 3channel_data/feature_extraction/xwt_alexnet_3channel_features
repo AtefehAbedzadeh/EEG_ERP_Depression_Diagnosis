@@ -1,0 +1,103 @@
+import numpy as np
+import pywt
+import os
+import torch
+from torchvision.models import alexnet
+import torchvision.transforms as transforms
+import cv2
+
+def cross_wavelet_transform(channel1, channel2):
+    cwt1, _ = pywt.cwt(channel1, np.arange(1, 45), 'morl', sampling_period = 0.004)
+    cwt2, _ = pywt.cwt(channel2, np.arange(1, 45), 'morl', sampling_period = 0.004)
+
+    # Calculate the cross wavelet coefficients
+    cwt_cross = cwt1 * np.conj(cwt2)
+
+    # Convert signals to tensors
+    cwt_cross_tensor = torch.from_numpy(cwt_cross).float()
+    return cwt_cross_tensor
+
+def read_subject_file(file_path):
+    data = np.loadtxt(file_path)
+    return data
+
+file_prefix_to_label = {
+    '0201': 1,
+    '0202': 0,
+    '0203': 0,
+}
+
+directory_path = "/content/gdrive/MyDrive/Preprocessing_EEG_3channels"
+file_list = os.listdir(directory_path)
+
+# AlexNet model definition
+model = alexnet(pretrained=True)
+model.eval()
+
+feature_vectors_channel1 = []
+feature_vectors_channel2 = []
+feature_vectors_channel3 = []
+labels = []
+
+for file_name in file_list:
+    file_path = os.path.join(directory_path, file_name)
+    data = read_subject_file(file_path)
+
+    # Separating different channels
+    channel1 = data[:, 0]
+    channel2 = data[:, 1]
+    channel3 = data[:, 2]
+
+    cwt_channel1 = cross_wavelet_transform(channel1, channel1)
+    cwt_channel2 = cross_wavelet_transform(channel2, channel2)
+    cwt_channel3 = cross_wavelet_transform(channel3, channel3)
+
+    channel1 = np.uint8(cwt_channel1)
+    channel2 = np.uint8(cwt_channel2)
+    channel3 = np.uint8(cwt_channel3)
+
+
+    channel1_img = np.stack([channel1]*3, axis=-1)
+    channel2_img = np.stack([channel2]*3, axis=-1)
+    channel3_img = np.stack([channel3]*3, axis=-1)
+
+    # Define the transformations required for AlexNet
+    transform = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize((227, 227)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.485, 0.485], std=[0.229, 0.229, 0.229])  # تنظیم برای 3 کانال
+    ])
+
+    # Apply conversions to each channel
+    channel1_tensor = transform(channel1_img)
+    channel2_tensor = transform(channel2_img)
+    channel3_tensor = transform(channel3_img)
+
+    # Add a dimension to the image
+    channel1_tensor = torch.unsqueeze(channel1_tensor, 0)
+    channel2_tensor = torch.unsqueeze(channel2_tensor, 0)
+    channel3_tensor = torch.unsqueeze(channel3_tensor, 0)
+
+    feature_vector1 = model.features(channel1_tensor)
+    feature_vector2 = model.features(channel2_tensor)
+    feature_vector3 = model.features(channel3_tensor)
+
+    feature_vector1 = torch.flatten(feature_vector1, 1)
+    feature_vector2 = torch.flatten(feature_vector2, 1)
+    feature_vector3 = torch.flatten(feature_vector3, 1)
+
+    feature_vectors_channel1.extend(feature_vector1.detach().numpy())
+    feature_vectors_channel2.extend(feature_vector2.detach().numpy())
+    feature_vectors_channel3.extend(feature_vector3.detach().numpy())
+
+
+    file_prefix = file_name[:4]
+    label = file_prefix_to_label[file_prefix]
+    labels.append(label)
+
+# Convert list of features and labels to numpy array
+features_channel1 = np.array(feature_vectors_channel1)
+features_channel2 = np.array(feature_vectors_channel2)
+features_channel3 = np.array(feature_vectors_channel3)
+label = np.array(labels)
