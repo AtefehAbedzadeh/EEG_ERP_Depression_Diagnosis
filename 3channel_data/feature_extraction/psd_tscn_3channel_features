@@ -1,3 +1,4 @@
+# PSD
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -74,3 +75,64 @@ print("Flattened and standardized PSD features shape:", standardized_psd_feature
 
 labels_psd = np.array(labels_psd)
 print(labels_psd.shape)
+
+#TSCN
+import os
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv1D, DepthwiseConv1D, BatchNormalization, Activation, Flatten, add, SpatialDropout1D, SeparableConv1D
+
+
+# Residual block function
+def ResBlock(x, filters, kernel_size, dilation_rate, F2):
+    r = Conv1D(filters, kernel_size, padding='same', kernel_initializer='he_uniform', dilation_rate=dilation_rate, activation='relu')(x)
+    r = BatchNormalization()(r)
+    r = Activation('relu')(r)
+    r = SpatialDropout1D(0.2)(r)
+    r = SeparableConv1D(F2, kernel_size, strides=1, use_bias=False, padding='same', dilation_rate=1, depth_multiplier=1)(r)
+    r = BatchNormalization()(r)
+    r = Activation('elu')(r)
+    r = SpatialDropout1D(0.2)(r)
+
+    if x.shape[-1] == filters:
+        shortcut = x
+    else:
+        shortcut = Conv1D(filters, kernel_size, padding='same')(x)  # shortcut
+
+    o = add([r, shortcut])
+    o = Activation('relu')(o)
+    return o
+
+
+# TCN
+def TCN(input_shape):
+    inputs = Input(shape=input_shape)
+    x = ResBlock(inputs, filters=64, kernel_size=5, dilation_rate=1, F2=64)
+    x = ResBlock(x, filters=32, kernel_size=3, dilation_rate=2, F2=32)
+    x = ResBlock(x, filters=32, kernel_size=2, dilation_rate=4, F2=32)
+
+    # Flatten layer for feature extraction
+    x = Flatten()(x)
+    model = Model(inputs=inputs, outputs=x)
+
+    return model
+
+
+standardized_psd_features = standardized_psd_features.astype('float64')
+psd = standardized_psd_features.reshape(55,3,4)
+
+# Define input shape
+input_shape = psd.shape[1:]
+print("input_shape",input_shape)
+
+# Model building
+model = TCN(input_shape)
+
+model.summary()
+
+# Feature extraction
+features_TSCN = model.predict(psd)
+print("Extracted features_TSCN shape:", features_TSCN.shape)
+print(features_TSCN)
