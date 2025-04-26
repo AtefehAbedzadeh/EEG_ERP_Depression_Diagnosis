@@ -1,0 +1,149 @@
+# psd
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import welch
+from sklearn.preprocessing import StandardScaler
+from scipy.io import loadmat
+
+
+def calculate_psd(data, fs, nperseg, noverlap, window):
+    frequencies, psd = welch(data, fs=fs, nperseg=nperseg, noverlap=noverlap, window=window, scaling='density')
+    return frequencies, psd
+
+
+def read_subject_file(file_path):
+    data = loadmat(file_path)
+    keys = list(data.keys())
+    return data, keys
+
+
+directory_path = "/content/gdrive/MyDrive/Preprocessing_EEG_128channels"
+file_list = os.listdir(directory_path)
+
+# Sampling frequency (Hz)
+fs = 250
+
+# Welch settings
+window = 'hamming'
+nperseg = fs # Length of each section
+noverlap = nperseg // 2 # (50% overlap) Overlap size
+
+bands = {
+    "delta": (0.5, 4),
+    "theta": (4, 8),
+    "alpha": (8, 13),
+    "beta": (13, 30),
+}
+
+
+file_prefix_to_label = {
+    '0201': 1,
+    '0202': 0,
+    '0203': 0,
+}
+
+psd_features = [] 
+flattened_psd = []
+labels_psd = []
+for file_name in file_list:
+    file_path = os.path.join(directory_path, file_name)
+    data, keys = read_subject_file(file_path)
+    key = keys[3]
+    data = data[key]
+
+
+    # Calculate PSD features for each channel
+    channel_psd_features = {}
+    for channel in range(3):
+        frequencies, psd = calculate_psd(data[channel, :], fs, nperseg, noverlap, window=window)
+
+        band_features = {}
+        for band, (low_freq, high_freq) in bands.items():
+            idx_band = np.logical_and(frequencies >= low_freq, frequencies <= high_freq)
+            band_features[band] = np.mean(psd[idx_band])
+
+        channel_psd_features[channel] = band_features
+
+         # PSD display
+        plt.figure(figsize=(12, 6))
+        plt.plot(frequencies, 10 * np.log10(psd)) 
+        plt.xlabel('Frequency (Hz)')
+        plt.ylabel('PSD (dB/Hz)')
+        plt.title(f'Power Spectral Density - Subject {file_name} (Channel {channel+1})')
+        plt.grid(True)
+        plt.show()
+
+
+    # Save PSD properties for each channel in the global list
+    flattened_psd.append(np.concatenate([list(channel_psd_features[ch].values()) for ch in range(3)]))
+
+    file_prefix = file_name[:4]
+    label_psd = file_prefix_to_label[file_prefix]
+    labels_psd.append(label_psd)
+
+scaler = StandardScaler()
+standardized_psd_features = scaler.fit_transform(flattened_psd)
+print("Flattened and standardized PSD features shape:", standardized_psd_features.shape)
+
+
+labels_psd = np.array(labels_psd)
+print(labels_psd.shape)
+
+# TSCN
+import os
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv1D, DepthwiseConv1D, BatchNormalization, Activation, Flatten, add, SpatialDropout1D, SeparableConv1D
+
+
+# Residual block function
+def ResBlock(x, filters, kernel_size, dilation_rate, F2):
+    r = Conv1D(filters, kernel_size, padding='same', kernel_initializer='he_uniform', dilation_rate=dilation_rate, activation='relu')(x)
+    r = BatchNormalization()(r)
+    r = Activation('relu')(r)
+    r = SpatialDropout1D(0.2)(r)
+    r = SeparableConv1D(F2, kernel_size, strides=1, use_bias=False, padding='same', dilation_rate=1, depth_multiplier=1)(r)
+    r = BatchNormalization()(r)
+    r = Activation('elu')(r)
+    r = SpatialDropout1D(0.2)(r)
+
+    if x.shape[-1] == filters:
+        shortcut = x
+    else:
+        shortcut = Conv1D(filters, kernel_size, padding='same')(x)  # shortcut
+
+    o = add([r, shortcut])
+    o = Activation('relu')(o)
+    return o
+
+
+# TCN
+def TCN(input_shape):
+    inputs = Input(shape=input_shape)
+    x = ResBlock(inputs, filters=64, kernel_size=5, dilation_rate=1, F2=64)
+    x = ResBlock(x, filters=32, kernel_size=3, dilation_rate=2, F2=32)
+    x = ResBlock(x, filters=32, kernel_size=2, dilation_rate=4, F2=32)
+
+    # Flatten layer for feature extraction
+    x = Flatten()(x)
+    model = Model(inputs=inputs, outputs=x)
+    return model
+
+standardized_psd_features = standardized_psd_features.astype('float64')
+psd = standardized_psd_features.reshape(53,128,4)
+
+# Define input shape
+input_shape = psd.shape[1:]
+
+# Model building
+model = TCN(input_shape)
+
+#model.summary()
+
+# Feature extraction
+features_TSCN = model.predict(psd)
+print("Extracted features shape:", features_TSCN.shape)
+print(features_TSCN)
