@@ -1,0 +1,91 @@
+import os
+import numpy as np
+import mne
+
+import h5py
+
+def read_subject_file(file_path):
+    raw = mne.io.read_raw_egi(file_path, preload=True)
+    raw.drop_channels(['E129'])
+    montage = mne.channels.make_standard_montage('GSN-HydroCel-128')
+    raw.set_montage(montage)
+
+    channels = ['hfix', 'hcue', 'hisi', 'hdot', 'hwrp',
+                'ffix', 'fcue', 'fisi', 'fdot', 'fwrp',
+                'sfix', 'scue', 'sisi', 'sdot', 'swrp']
+    min_duration = 0.1  # 100 ms (as an example)
+
+    all_events = []
+    event_id = {}
+    for i, ch in enumerate(channels):
+        events = mne.find_events(raw, stim_channel=ch, min_duration=min_duration/raw.info['sfreq'])
+        if len(events) > 0:
+            events[:, 2] = i + 1
+            all_events.append(events)
+            event_id[ch] = i + 1
+
+    all_events = np.concatenate(all_events)
+    all_events = all_events[np.argsort(all_events[:, 0])]
+
+    tmin = -0.1  # Start time relative to event (seconds)
+    tmax = 0.6   # End time relative to event (seconds)
+
+    epochs = mne.Epochs(raw, all_events, event_id, tmin, tmax, preload=True, baseline=(tmin, 0))
+
+    happy_trials = []
+    fear_trials = []
+    sad_trials = []
+
+    for i in range(160):
+        happy_trial = np.concatenate([epochs['hfix'][i].get_data(copy=True),
+                                      epochs['hcue'][i].get_data(copy=True),
+                                      epochs['hisi'][i].get_data(copy=True),
+                                      epochs['hdot'][i].get_data(copy=True),
+                                      epochs['hwrp'][i].get_data(copy=True)], axis=2)
+        happy_trials.append(happy_trial)
+
+        fear_trial = np.concatenate([epochs['ffix'][i].get_data(copy=True),
+                                     epochs['fcue'][i].get_data(copy=True),
+                                     epochs['fisi'][i].get_data(copy=True),
+                                     epochs['fdot'][i].get_data(copy=True),
+                                     epochs['fwrp'][i].get_data(copy=True)], axis=2)
+        fear_trials.append(fear_trial)
+
+        sad_trial = np.concatenate([epochs['sfix'][i].get_data(copy=True),
+                                    epochs['scue'][i].get_data(copy=True),
+                                    epochs['sisi'][i].get_data(copy=True),
+                                    epochs['sdot'][i].get_data(copy=True),
+                                    epochs['swrp'][i].get_data(copy=True)], axis=2)
+        sad_trials.append(sad_trial)
+
+    happy_neutral_data = np.concatenate(happy_trials, axis=0)
+    fear_neutral_data = np.concatenate(fear_trials, axis=0)
+    sad_neutral_data = np.concatenate(sad_trials, axis=0)
+
+    # Combine all data from blocks to create the "all" dataset
+    all_data = np.concatenate([happy_neutral_data, fear_neutral_data, sad_neutral_data], axis=0)
+
+    return happy_neutral_data, fear_neutral_data, sad_neutral_data, all_data
+
+def save_to_hdf5(file_path, data):
+    with h5py.File(file_path, 'w') as f:
+        f.create_dataset('data', data=data, compression='gzip')
+
+directory_path = "/content/gdrive/My Drive/EEG_128channels_ERP_lanzhou_2015"
+file_list = os.listdir(directory_path)
+
+# Create folders to store data
+all_dir = "/content/gdrive/MyDrive/ERP_all_data"
+
+os.makedirs(all_dir, exist_ok=True)
+
+for file_name in file_list:
+    file_path = os.path.join(directory_path, file_name)
+
+    happy_data, fear_data, sad_data, all_data = read_subject_file(file_path)
+
+    # Save data in relevant folders
+    base_name = os.path.splitext(file_name)[0]
+
+
+    save_to_hdf5(os.path.join(all_dir, f'{base_name}_all.h5'), all_data)
