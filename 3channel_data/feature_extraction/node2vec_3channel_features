@@ -1,0 +1,135 @@
+# **step 1**
+"""
+
+import os
+import numpy as np
+import networkx as nx
+from sklearn.metrics import pairwise_distances
+
+# Calculate the Euclidean distance between two samples
+def euclidean_distance(point1, point2):
+    return np.linalg.norm(point1 - point2)
+
+def read_subject_file(file_path):
+    data = np.loadtxt(file_path)
+    return data
+
+
+directory_path = "/content/gdrive/MyDrive/Preprocessing_segmentation_EEG_3channels_40s"
+file_list = os.listdir(directory_path)
+
+graph1 = nx.Graph()
+graph2 = nx.Graph()
+graph3 = nx.Graph()
+
+# Reading and adding data to graphs
+for i, file1 in enumerate(file_list):
+    for j, file2 in enumerate(file_list):
+        if i < j:
+            file1_path = os.path.join(directory_path, file1)
+            file2_path = os.path.join(directory_path, file2)
+
+            data1 = read_subject_file(file1_path)
+            data2 = read_subject_file(file2_path)
+
+
+            distance1 = euclidean_distance(data1[:, 0], data2[:, 0])  # First column
+            distance2 = euclidean_distance(data1[:, 1], data2[:, 1])  # Second column
+            distance3 = euclidean_distance(data1[:, 2], data2[:, 2])  # Third column
+
+            graph1.add_edge(file1, file2, weight=distance1)
+            graph2.add_edge(file1, file2, weight=distance2)
+            graph3.add_edge(file1, file2, weight=distance3)
+
+"""# **step 2**"""
+
+import numpy as np
+
+# Hyperparameters
+m = 0.5
+o = 2
+
+# Calculate the transition probabilities between nodes
+def calculate_transition_probabilities(graph, m, o):
+    transition_probabilities = {}
+
+    for node in graph.nodes:
+        neighbors = list(graph.neighbors(node))
+        total_weight = sum(graph[node][neighbor]['weight'] for neighbor in neighbors)
+
+        probabilities = {}
+        for neighbor in neighbors:
+            weight = graph[node][neighbor]['weight']
+            d_ux = nx.shortest_path_length(graph, source=node, target=neighbor)
+
+            if d_ux == 0:
+                alpha = 1 / m
+            elif d_ux == 1:
+                alpha = 1
+            elif d_ux == 2:
+                alpha = 1 / o
+
+            probability = alpha * (weight / total_weight)
+            probabilities[neighbor] = probability
+
+        transition_probabilities[node] = probabilities
+
+    return transition_probabilities
+
+# Calculate transition probabilities for each graph
+transition_probabilities1 = calculate_transition_probabilities(graph1, m, o)
+transition_probabilities2 = calculate_transition_probabilities(graph2, m, o)
+transition_probabilities3 = calculate_transition_probabilities(graph3, m, o)
+
+"""# **step 3**"""
+
+import random
+
+# Generate random walks for all nodes
+def generate_random_walks_all_nodes(graph, transition_probabilities, walk_length):
+    random_walks = []
+
+    for source_node in graph.nodes:
+        for _ in range(10):
+            walk = [source_node]
+            current_node = source_node
+
+            for _ in range(walk_length - 1):
+                neighbors = list(graph.neighbors(current_node))
+                probabilities = [transition_probabilities[current_node].get(neighbor, 0) for neighbor in neighbors]
+                probabilities_sum = sum(probabilities)
+
+                if probabilities_sum > 0:
+                    probabilities = [prob / probabilities_sum for prob in probabilities]
+                    next_node = random.choices(neighbors, probabilities)[0]
+                    walk.append(next_node)
+                    current_node = next_node
+                else:
+                    break
+
+            random_walks.append(walk)
+
+    return random_walks
+
+walk_length = 100
+
+# Generate random walks for each graph
+random_walks1 = generate_random_walks_all_nodes(graph1, transition_probabilities1, walk_length)
+random_walks2 = generate_random_walks_all_nodes(graph2, transition_probabilities2, walk_length)
+random_walks3 = generate_random_walks_all_nodes(graph3, transition_probabilities3, walk_length)
+
+"""# **step 4**"""
+
+from gensim.models import Word2Vec
+
+d = 128
+
+# Definition of the Word2Vec model
+model1 = Word2Vec(sentences=random_walks1, vector_size=d, window=2, min_count=0, sg=1)
+model2 = Word2Vec(sentences=random_walks2, vector_size=d, window=2, min_count=0, sg=1)
+model3 = Word2Vec(sentences=random_walks3, vector_size=d, window=2, min_count=0, sg=1)
+
+# node_embeddings
+node_embeddings1 = model1.wv
+node_embeddings2 = model2.wv
+node_embeddings3 = model3.wv
