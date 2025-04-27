@@ -19,7 +19,7 @@ X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
 X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
 
 
-# مدل GRU
+# GRU
 model = Sequential()
 model.add(GRU(300, activation='tanh', input_shape=(X_train.shape[1], X_train.shape[2]), return_sequences=False))
 model.add(BatchNormalization())
