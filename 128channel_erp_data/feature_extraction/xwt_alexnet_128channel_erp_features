@@ -35,7 +35,7 @@ file_list = os.listdir(all_dir)
 
 batch_size = 100000
 
-# تعریف مدل AlexNet
+# AlexNet
 model = models.alexnet(pretrained=True)
 model.eval()
 
